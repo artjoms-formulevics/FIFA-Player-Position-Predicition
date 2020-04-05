@@ -1,0 +1,1728 @@
+---
+title: "Capstone: Choose Your Own"
+author: "Artjoms Formulevics"
+date: "03.04.2020"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    highlight: pygments
+    keep_tex: true
+  html_document: default
+  always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center', cache=FALSE, cache.lazy = FALSE, warning = FALSE)
+options(knitr.table.format = "latex")
+```
+
+```{r lib, include = FALSE}
+# Installing libraries, if not already present
+if (!require(caret))
+  install.packages("caret")
+if (!require(data.table))
+  install.packages("data.table")
+if (!require(dplyr))
+  install.packages("dplyr")
+if (!require(forcats))
+  install.packages("forcats")
+if (!require(ggplot2))
+  install.packages("ggplot2")
+if (!require(reshape2))
+  install.packages("reshape2")
+if (!require(kableExtra))
+  install.packages("kableExtra")
+if (!require(knitr))
+  install.packages("knitr")
+if (!require(stringr))
+  install.packages("stringr")
+if (!require(tidyr))
+  install.packages("tidyr")
+if (!require(tidyverse))
+  install.packages("tidyverse")
+if (!require(magrittr))
+  install.packages("magrittr")
+if (!require(ggrepel))
+  install.packages("ggrepel")
+if (!require(caTools))
+  install.packages("caTools")
+if (!require(MLmetrics))
+  install.packages("MLmetrics")
+if (!require(xgboost))
+  install.packages("xgboost")
+if (!require(rpart))
+  install.packages("rpart")
+if (!require(C50))
+  install.packages("C50")
+if (!require(klaR))
+  install.packages("klaR")
+if (!require(MASS))
+  install.packages("MASS")
+if (!require(gbm))
+  install.packages("gbm")
+if (!require(glmnet))
+  install.packages("glmnet")
+if (!require(Matrix))
+  install.packages("Matrix")
+
+# Loading libraries
+library(caret)
+library(data.table)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(reshape2)
+library(kableExtra)
+library(knitr)
+library(stringr)
+library(tidyr)
+library(tidyverse)
+library(magrittr)
+library(ggrepel)
+library(caTools)
+library(MLmetrics)
+library(xgboost)
+library(rpart)
+library(C50)
+library(klaR)
+library(MASS)
+library(gbm)
+library(glmnet)
+library(Matrix)
+```
+
+```{r data}
+# Loading Data
+fifa <-
+  read.csv("https://raw.githubusercontent.com/artjoms-formulevics/HarvardX/master/data.csv",
+           header = T,
+           stringsAsFactors = F)
+
+# Saving original dataset
+fifa_original <- fifa
+```
+
+\newpage
+
+# Executive Summary
+
+**Motivation:** Author is a big fan of both real football as sports and as a digital game (FIFA series). Therefore, it was interesting topic to take for the analysis.
+
+**Purpose of the project:** Sometimes it is hard to determine, what place on the football field is the most suitable for the player to play on. Therefore the goal of this project is to create player classification algorithm for players from FIFA 19 game. Classification of players is done by predicting their most suitable position on the field (role) during games.
+
+**Dataset used:** FIFA 19 complete player dataset" is used from Kaggle. Dataset includes detailed attributes for every player registered in the latest edition of FIFA 19 database.
+
+This dataset contains ~18k rows (players) and 89 columns (attributes).
+
+The project is divided in the several parts:
+
+1. Data import and data exploration;
+2. Data pre-processing;
+3. Building several prediction models;
+4. Evaluating results and drawing conclusions.
+
+**Classification:** All players except for Goalkeepers will be divided in 3 categories - Defender, Midfielder and Attacker. Models will be predicting to which of these 3 positions belongs the player.
+
+**Criteria:** Models are going to be evaluated with multiple metrics available in Caret package, from which Accuracy metric will be one of the most important.
+
+As the best model, the **GLMNET** model was selected. The Accuracy of this model was ~ **0.895** and Mean Balanced Accuracy ~ **0.913**.
+
+\newpage
+
+# Exploratory Data Analysis
+
+## Data Tidying and Pre-processing
+
+The main dataset is loaded as ```fifa```. There are 89 columns. The set includes players attributes like Age, Nationality, Overall, Potential, Club, Value, Wage, Preferred Foot, International Reputation, Weak Foot, Skill Moves, Work Rate, etc.
+
+```{r head_rows}
+# Getting dimensions (size) of the dataset
+data.frame("Rows" = nrow(fifa), "Columns" = ncol(fifa)) %>%
+  kable(caption = "Dimensions of the dataset") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+```{r str}
+# Getting information about variables classes and values
+data.frame(
+  variable_name = names(fifa),
+  class = sapply(fifa, typeof),
+  first_values = sapply(fifa, function(x)
+    paste0(head(x, n = 3),  collapse = ", ")),
+  row.names = NULL
+) %>%
+  kable(longtable = TRUE, caption = "The structure of the data") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header"),
+    full_width = TRUE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+As can be seen from the data structure table, there are numerous variables that must be pre-processed, in order to be incorporated into algorithm:
+
+* Value, Wage and Release Clause are represented as characters with K or M sign, and will be converted to numerical;
+* Height and Weigth are are represented as characters in Imperial System, and will be converted to numerical (+ converted to Metric System);
+* There are multiple variables that are not meaningful and therefore need to be excluded (e.g. link to Player Photo or some parameters that are not any way related to player's position, e.g. Date when Joined the Club);
+* Goalkeepers will be excluded from the analysis, as they have completely different set of important characterisitcs. They differ to much from field players;
+* There are 26 columns (from nr. 29 to 54) that represent player's fit to each position. Since the goal of this project is to predict the fit for position, these columns will be also deleted to make the predictions clean.
+
+```{r processing1}
+# Converting player Value, Wage and Release Clause to numeric
+fifa$ValueLast <-
+  sapply(strsplit(as.character(fifa$Value), ""), tail, 1)
+fifa$WageLast <-
+  sapply(strsplit(as.character(fifa$Wage), ""), tail, 1)
+fifa$Release.Clause.Last <-
+  sapply(strsplit(as.character(fifa$Release.Clause), ""), tail, 1)
+
+extract <- function(x) {
+  regexp <- "[[:digit:]]+"
+  str_extract(x, regexp)
+}
+
+temp <- sapply(fifa$Value, extract)
+fifa$Value <- as.numeric(temp)
+fifa$Value <-
+  ifelse(fifa$ValueLast == "M", fifa$Value * 1000000, fifa$Value * 1000)
+
+temp <- sapply(fifa$Wage, extract)
+fifa$Wage <- as.numeric(temp)
+fifa$Wage <-
+  ifelse(fifa$WageLast == "M", fifa$Wage * 1000000, fifa$Wage * 1000)
+
+temp <- sapply(fifa$Release.Clause, extract)
+fifa$Release.Clause <- as.numeric(temp)
+fifa$Release.Clause <- ifelse(
+  fifa$Release.Clause.Last == "M",
+  fifa$Release.Clause * 1000000,
+  fifa$Release.Clause * 1000
+)
+
+# Converting Height to numeric & metric system
+temp <- str_split(fifa$Height, "'")
+for (i in 1:length(temp)) {
+  temp[[i]] <- as.numeric(temp[[i]])
+  temp[[i]] <- (temp[[i]][1] * 12) + temp[[i]][2]
+}
+temp <- as.numeric(unlist(temp)) * 2.54
+fifa$Height <- temp
+
+# Converting Weight to numeric & metric system
+temp <- sapply(fifa$Weight, extract)
+temp <- as.numeric(temp) * 0.453592
+fifa$Weight <- temp
+
+# Filtering out Goalkeepers
+fifa <- filter(fifa, fifa$Position != "GK")
+fifa <- filter(fifa, fifa$Position != "")
+```
+
+```{r processing2, echo=TRUE}
+# Removing Poistion scores that won't be used
+fifa[, 29:54] <- NULL
+
+# Removing not meaningful variables
+fifa <-
+  subset(
+    fifa,
+    select = -c(
+      ID,
+      X,
+      Photo,
+      Flag,
+      Club.Logo,
+      Real.Face,
+      Joined,
+      Loaned.From,
+      Contract.Valid.Until,
+      GKDiving,
+      GKHandling,
+      GKKicking,
+      GKPositioning,
+      GKReflexes,
+      ValueLast,
+      WageLast,
+      Release.Clause.Last,
+      Special
+    )
+  )
+
+```
+
+In addition: Player Positions must be grouped to just three - Defender (Def), Midfielder (Mid) and Attacker (Att). These three position groups will be later predicted by the algorithms. Current positions will be grouped to new as follows:
+
+```{r positions1}
+# Show Position groups
+temp <- data.frame(Original = unique(fifa$Position))
+temp$New <- fct_collapse(
+  temp$Original,
+  Def = c("RCB", "CB", "LCB", "LB", "RB", "RWB", "LWB"),
+  Mid = c(
+    "RCM",
+    "LCM",
+    "LDM",
+    "CAM",
+    "CDM",
+    "RM",
+    "LAM",
+    "LM",
+    "RDM",
+    "CM",
+    "RAM"
+  ),
+  Att = c("RF", "ST", "LF", "RS", "LS", "RW", "CF", "LW")
+)
+temp %>%
+  arrange(New, Original) %>%
+  kable(caption = "Original vs New Positions", longtable = TRUE) %>%  
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+```{r positions2}
+# Group all positions into three categories
+fifa$Position_gr <- fct_collapse(
+  fifa$Position,
+  Def = c("RCB", "CB", "LCB", "LB", "RB", "RWB", "LWB"),
+  Mid = c(
+    "RCM",
+    "LCM",
+    "LDM",
+    "CAM",
+    "CDM",
+    "RM",
+    "LAM",
+    "LM",
+    "RDM",
+    "CM",
+    "RAM"
+  ),
+  Att = c("RF", "ST", "LF", "RS", "LS", "RW", "CF", "LW")
+)
+
+fifa$Position_gr <-
+  factor(fifa$Position_gr, levels = c("Def", "Mid", "Att"))
+
+# Remove unwanted variables and temporarty variables
+rm(temp, i, extract)
+
+```
+
+
+## Data Exploration
+
+Taking a look at the dataset after initial processing:
+
+```{r dim}
+# Getting dimensions (size) of the dataset
+
+data.frame("Rows" = nrow(fifa), "Columns" = ncol(fifa)) %>%
+  kable(caption = "New Dimensions of the dataset") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header", "HOLD_position"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+```{r variables}
+# Getting information about variables classes and values
+data.frame(
+  variable_name = names(fifa),
+  class = sapply(fifa, typeof),
+  first_values = sapply(fifa, function(x)
+    paste0(head(x, n = 3),  collapse = ", ")),
+  row.names = NULL
+) %>%
+  kable(longtable = TRUE, caption = "New Dataset Structure") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header", "HOLD_position"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+```{r mising_vals}
+# Showing missing values
+sapply(fifa, function(x)
+  sum(is.na(x))) %>%
+  kable(longtable = TRUE, caption = "Missing Values") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+It can be seen that there are lots of missing values in Release Clause variable. Which is understandable, since it is optional clause in player's contract. It does mean that player if any club is ready to pay the sum listed in the Release Clause for this player, they do not need to agree with the current player's club. In other words, it is the sum for which club is consent to sell the player. It is not mandatory to have this caluse in player's contract - in this case there is no pre-determined sum and this player can be sold only if two clubs agree on the certain amount. That means not having the release clause is somewhat equal to have it as infinite number. Therefore, there is no good way to deal with ```NA``` values and it will be removed from the analysis in order to leave in consistent.
+
+```{r rel_clause, echo=TRUE}
+# Removing Release Clause from analysis
+fifa$Release.Clause <- NULL
+```
+
+## Position Analysis
+
+Chart below shows the number of players by each position (as originally in the dataset). It can be seen that there are many Strikers (ST) and Centre-Backs (CB). The table, however, shows how many players fall in each of three new defined groups - Defenders, Midfielders and Attackers. Despite there are lots of Strikers, overall nubmer of Attacking Players is lower than for Midfileders and Defenders.
+
+```{r positions}
+# Number of players by position in the dataset
+fifa %>% group_by(Position) %>% summarise(count = n()) %>%
+  ggplot(aes(reorder(Position,-count), count)) +
+  theme_light()  +
+  geom_col() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Number of Players by Position",
+       x = "Position",
+       y = "Players")
+
+# Number of players by position after grouping in the dataset
+fifa %>% group_by(Position = Position_gr) %>% summarise(count = n()) %>%
+  kable(caption = "Number of Players by Position") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+Following chart shows the distribution of Player's ratings by Position. It can be seen, that all three groups follow normal distribution.
+
+```{r pos_hist}
+# Distribution of Overall Rating by Position
+
+fifa %>%
+  ggplot(aes(Overall)) +
+  theme_light()  +
+  geom_histogram(bins =  14) +
+  labs(title = "Overall Rating Distribution by Position",
+       x = "Overall Rating",
+       y = "Frequency") +
+  facet_grid(Position_gr ~ .)
+```
+
+## Player Analysis
+
+Following table shows 15 top players in the game by their Overall raiting. Can be seen that there are just few playes that have scores above 90.
+
+```{r top_ratings}
+# Top 15 players by overall rating
+
+fifa %>%
+  group_by(Position_gr, Name, Overall, Potential) %>%
+  summarise() %>%
+  arrange(desc(Overall)) %>%
+  head(n = 15) %>%
+  kable(caption = "Number of Players by Position", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+Following table shows top 15 highest valued players and their wages. Many players in this table previously appeared in table from above, which means that high paid players are usually amongst the best by rating.
+
+```{r top_value}
+# Top 15 players by Value
+fifa %>%
+  group_by(Position_gr, Name, Value, Wage) %>%
+  summarise() %>%
+  arrange(desc(Value)) %>%
+  head(n = 15) %>%
+  kable(caption = "Top 15 players by Value", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+Following chart shows most valuable tems by total player value. As expected, most renowed and popular clubs in real life are the most valuable in the game as well.
+
+```{r top_teams}
+# Finding the most valuable teams
+fifa %>%
+  group_by(Club) %>%
+  summarise(Club.Squad.Value = round(sum(Value) / 1000000)) %>%
+  arrange(-Club.Squad.Value) %>%
+  head(10) %>%
+  ggplot(aes(
+    x = as.factor(Club) %>%
+      fct_reorder(Club.Squad.Value),
+    y = Club.Squad.Value,
+    label = Club.Squad.Value
+  )) +
+  geom_text(hjust = 0.01,
+            inherit.aes = T,
+            position = "identity") +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Club") +
+  ylab("Squad Value in Million") +
+  ggtitle("Most valuable teams")
+```
+
+## Jersey Number Analysis
+
+Following plot shows correlation between player jersey number and player's overall rating. It can be seen that only few nubers have high-skilled players on average. Plus, the numbers '63, 76, 79, 92' are not popular, so probably owned only by few young talents. Jersey number '10' which is traditionally worn by great playmakers or attackers stands out as scoring average above 70. Also, small numbers (2-11) are tending having better ratings, as they are usually picked by first-team (best) players.
+
+```{r jersey_corr}
+# Correlation between player rating and jersey number
+fifa %>%
+  group_by(Jersey.Number) %>%
+  summarise(
+    Avg.Overall = sum(Overall) / length(Jersey.Number),
+    Player.Count = sum(Jersey.Number)
+  ) %>%
+  arrange(-Avg.Overall) %>%
+  ggplot(aes(
+    x = Jersey.Number,
+    y = Avg.Overall,
+    col = ifelse(Avg.Overall < 70, "darkgrey", "Red")
+  )) +
+  geom_point(position = "jitter") +
+  theme(legend.position = "none") +
+  geom_text_repel(aes(label = ifelse(Avg.Overall >= 70, Jersey.Number, ""))) +
+  ggtitle("Correlation between player rating and jersey number")
+```
+
+The following table shows the most popular jersey numbers for each group of positions. Not surprisingly, small numbers (2-11) are most popular.
+
+```{r jerseys}
+# Most popular Player Jersey by Position Group
+bind_rows(
+  fifa[fifa$Position_gr == "Def", ] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5),
+  fifa[fifa$Position_gr == "Mid", ] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5),
+  fifa[fifa$Position_gr == "Att", ] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5)
+) %>%
+  kable(caption = "Most popular jerseys by posiitons", longtable = TRUE) %>% 
+  collapse_rows(columns = 1) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+\newpage
+
+# Model Building
+
+## Preparing Dataset
+
+Before creating algorithms, last preparation steps are neccessarry. Additional dataset ```fifa_names``` is created to hold the names and positions of players that then can be compared with the predictions. This dataset will be split to test and training set in the same way as the main dataset. In addition, from the dataset will be removed non-meaningful for algorithm training variables like Name, Club, Nationality (each Club and Country needs all positions, so they are not meaningful) and old Position variable (it is redundant).
+
+```{r pre1, echo=TRUE}
+# Creating dataset with names for testing
+fifa_names <-
+  subset(fifa, select = c(Name, Overall, Position, Position_gr))
+
+# Removing Names and ungroped positions and unwanted variables
+fifa$Position <- fifa$Position_gr
+fifa <-
+  subset(fifa, select = -c(Name, Position_gr, Club, Nationality))
+```
+
+```{r pre2}
+# Leaving position pout of preprocessing
+
+fifa_pos <- fifa$Position
+fifa$Position <- NULL
+
+# Converting characters to factors
+fifa[sapply(fifa, is.character)] <-
+  lapply(fifa[sapply(fifa, is.character)],
+         as.factor)
+```
+
+In the following step, remaining data needds to be pre-processed:
+
+* All numberical variables are going to be centered and scaled;
+* All categorical variables will be converted to binary numbers (0 or 1) using ```dummyVars``` (except Position variable which will be predicted);
+* Seed will be set to 1 for reproducability and assigned to variable;
+* ```train.control``` function will be introduced with 10-fold cross-validation repeated 3 times (```repeatedcv```) for training algorithms - a balance between number of repeats and computing resources needed;
+* Dataset will be divided to ```train``` set and ```test``` set. The ratio used is 90% to train and 10% to test, as the dataset's size is not big and more observations are required to train the models.
+
+Abovementioned steps:
+
+```{r pre3, echo=TRUE}
+# Centering and scaling
+preProc <- preProcess(fifa, method = c("center", "scale"))
+fifa <- predict(preProc, fifa)
+
+# Convering factors to numbers (dummy variables)
+dmy <- dummyVars("~ .", data = fifa, fullRank = F)
+fifa <- data.frame(predict(dmy, newdata = fifa))
+
+# Putting Position back as the first variable
+fifa$Position <- fifa_pos
+fifa <- fifa[, c(61, 1:60)]
+
+# Setting seed for reproducability
+seed = 1
+set.seed(seed)
+
+# Train Control function for repeated cross-validation
+train.control <-
+  trainControl(method = "repeatedcv",
+               number = 10,
+               repeats = 3)
+
+# Splitting into train and test sets 0.9 vs 0.1 (also for names)
+sample <- sample.split(fifa, SplitRatio = 0.9)
+train <- subset(fifa, sample == TRUE)
+test <- subset(fifa, sample == FALSE)
+
+train_names <- subset(fifa_names, sample == TRUE)
+test_names <- subset(fifa_names, sample == FALSE)
+```
+
+## Modelling
+
+There are 10 popular machine learning algorithms of different complexity that are going to be used for modelling:
+
+1. Linear Discriminant Analysis - "lda"
+2. Regularized Discriminant Analysis - "rda"
+3. Naive Bayes Algorithm - "nb"
+4. K-Nearest Neighbours - "knn"
+5. RPART: Classification And Regression Tree (CART) - "rpart"
+6. C5.0 Decision Tree Algorithm - "C5.0"
+7. Random Forest Algorithm - "rf"
+8. GLMNET: Generalized Linear Model (Lasso and Elastic-Net Regularized) - "glmnet"
+9. Gradient Bossting Machine - "gbm"
+10. XGBoost Linear - "xgbLinear"
+
+Each model with previously defined ```seed``` and ```train.control``` values will be applied to ```train``` set and saved to named list ```fit```. Then each model predictions for ```test``` set observations will be saved into ```pred``` list. In addition, probability outcomes of each model will be saved to a list ```pred.prob```.
+
+The whole modelling cycle:
+
+```{r modelling, echo=TRUE, message=FALSE}
+# Setting list and names
+fit <- list()
+pred <- list()
+pred.prob <- list()
+
+models <-
+  c("lda",
+    "rda",
+    "nb",
+    "knn",
+    "rpart",
+    "C5.0",
+    "rf",
+    "glmnet",
+    "gbm",
+    "xgbLinear")
+
+# Creating each model and predictions & probabilities for each class
+for (i in c(1:length(models))) {
+  set.seed(seed)
+  if(models[i] == "gbm") {
+  fit[[i]] <-
+    train(Position ~ .,
+          data = train,
+          method = models[i],
+          trControl = train.control,
+          verbose = F) # supress iterations output for gbm model
+  } else {
+    fit[[i]] <-
+    train(Position ~ .,
+          data = train,
+          method = models[i],
+          trControl = train.control)
+}
+  pred[[i]] <- predict(fit[[i]], test, type = "raw")
+  pred.prob[[i]] <- predict(fit[[i]], test, type = "prob")
+}
+
+# Adding names to models in list
+names(fit) <- models
+names(pred) <- models
+names(pred.prob) <- models
+```
+
+\newpage
+
+# Model Evaluation
+
+## Examine Incorrectly Guessed Players
+
+Following tables will show top 10 players (by rating) which were incorrectly classified by each model.
+
+```{r incorrect_players1, results="asis"}
+# Setting lists
+test.model <- list()
+n_miss <- list()
+
+# For each model creating a table with actual vs predicted outcome & probabilities of classes
+# Also creating a table with overall number of incorrect predictions
+# For each algorithm showing 10 top players (by rating) which were incorrectly classified
+for (i in c(1:length(models))) {
+  test.model[[i]] <-
+    cbind(test_names, pred = pred[[i]], round(pred.prob[[i]], 2))
+  test.model[[i]]$correct <-
+    ifelse(test.model[[i]]$Position_gr == test.model[[i]]$pred, 1, 0)
+  test.model[[i]]$method <- models[i]
+  
+  n_miss[[i]] <-
+    test.model[[i]] %>% filter(test.model[[i]]$correct == 0) %>% summarise(n())
+  
+  print(head(test.model[[i]][test.model[[i]]$correct == 0, ], 10) %>%
+          kable(caption = "Top 10 players by rating incorrectly guessed", longtable = TRUE) %>%
+          kable_styling(
+            latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+            full_width = FALSE,
+            position = "center",
+            font_size = 11
+          )
+  )
+  cat("\n")
+}
+
+# Adding model names
+names(test.model) <- models
+names(n_miss) <- models
+
+# Binding all results together
+testing_results <- rbindlist(test.model)
+n_missed <- rbindlist(n_miss, idcol = models)
+colnames(n_missed) <- c("Model", "Missed")
+```
+
+As can be seen, there are many high-rated famous players that were incorrectly classified by the algorithms. However, that has a logical explanation - despite all players have their formal role (Defender, Midfielder or Attacker), their real role on the pitch may highly differ. There are midfielders who are focused on the attack which might be (and were) classified as attackers due to prevalence of their attacking traits. And vice-versa. 
+
+In the tables above can be seen that there are players that are repeating in every or almost every algorithm. Theregore, the results were binded together to create summary of which top players were incorrectly classified by multiple algorithms.
+
+```{r incorrect_players2}
+# Showing how top players were incorrectly classified
+testing_results %>% filter(correct == "0") %>% group_by(Name, Overall, Position, Position_gr, pred) %>%
+  summarise(count = n()) %>%
+  arrange(desc(Overall)) %>% head(20) %>%
+  kable(caption = "Highest-rated incorrectly classified players", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+By taking a closer look, it is possible to make several explanations:
+
+  * Kevin De Bruyne was classified as Attacker, while being a Midfielder, but he is well-known for being one of the best attacking midfileders and one of the best by the number of assists or created chances in English Premier League;
+  * Luka Modric is one of the best universal midfielders in the game, Ballon d'Or 2018 winner, that excels in both defending and attacking, so some algorithms marked him incorrectly. Moreover, as it will be shown later, he was classified incorrectly by the worst algorithms;
+    ```{r modric}
+    testing_results[Name == "L. Modrić" &
+                      correct == 0,] %>%
+      kable(caption = "Incorrect guesses for Luka Modric", longtable = TRUE) %>%
+      kable_styling(
+        latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+        full_width = FALSE,
+        position = "center",
+        font_size = 11
+      )
+    ```
+  * Kylian Mbappe and Pierre-Emerick Aubameyang are well-known for their attacking abilities and therefore most algorithms classified them as Attackers;
+  * Leonardo Bonucci, while being a Defender is known for having a good passing ability and often starts attacks for his team, therefore was incorrectly marked as Midfielder.
+    ```{r bonucci}
+    testing_results[Name == "L. Bonucci" & correct == 0,] %>%
+      kable(caption = "Incorrect guesses for Leonardo Bonucci", longtable = TRUE) %>%
+      kable_styling(
+        latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+        full_width = FALSE,
+        position = "center",
+        font_size = 11
+      )
+    ```
+
+And following table shows which players (sorted by rating) were incorrectly classfied by most (all) algorithms.
+
+```{r incorrect_players3}
+# Showing which players been wrongly classified by most algorithms
+testing_results %>% filter(correct == "0") %>% group_by(Name, Overall, Position, Position_gr) %>%
+  summarise(count = n()) %>%
+  arrange(desc(Overall)) %>% arrange(desc(count)) %>% head(20) %>%
+  kable(caption = "Highest-rated incorrectly classified players by all algorithms", 
+        longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+Only two players with ratings of 80 and more were classified incorrectly by all algorithms. For example, Andreas Iniesta was playing Midfielder while being in Barcelona and only recently switched role to Attacker, but still has more Midfield-based traits (and one algorithms was just bad). And as can be seen from the original dataset, even in the game itself, he is more suitable to be Midfielder.
+
+```{r iniesta1}
+testing_results[Name == "Iniesta" & correct == 0, ] %>%
+  kable(caption = "Incorrect guesses for Andreas Iniesta", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c(
+      "striped",
+      "bordered",
+      "hover",
+      "responsive",
+      "HOLD_position",
+      "repeat_header"
+    ),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+    
+```{r iniesta2}
+  data.frame(fifa_original[fifa_original$Name == "Iniesta", 29:54])  %>% t() %>% data.frame()  %>%
+  kable(caption = "Poisiton traits for Iniesta", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c(
+      "striped",
+      "bordered",
+      "hover",
+      "responsive",
+      "HOLD_position",
+      "repeat_header"
+    ),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+In the following table can be seen how many incorrect predictions was for each model in descending order out of total 1852 observations in test set.
+
+```{r inccorrect_players4}
+# Showing total number of missed predictions for each model in descending order
+n_missed %>% arrange(desc(Missed)) %>%
+  kable(caption = "Total number of players incorrectly predicted by each model") %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+```
+
+Already from this table can be seen that more complex models like GLMNET, XGBoost, Gradient Boosting Machine and Random Forest are coping with the task better that the others.
+
+## Evaluation Metrics
+
+Below can be seen summary statistics for Accuracy and Kappa metrics for resamples of all algorithms.
+
+```{r summr_acc_kappa, echo=TRUE}
+# Creating summary for all resamples for all models with Accuracy and Kappa metrics
+results_resamples <- resamples(fit)
+summary(results_resamples, metric = c("Accuracy", "Kappa"))
+```
+
+Accuracy metrics plotted as Box-Plot.
+
+```{r acc_plot, message=FALSE}
+# Selecting Accuracy metric to plot with Box-Plot chart
+results_acc <-
+  results_resamples$values[, c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)]
+
+colnames(results_acc) <-
+  gsub("~Accuracy", "", colnames(results_acc))
+
+ggplot(data = melt(results_acc),
+       aes(x = variable, y = value)) + geom_boxplot() + theme_light()  +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Comparison of Accuracy of Models",
+       x = "Model",
+       y = "Accuracy")
+```
+
+It can be seen that Naive Bayes and RPART algorithms are significantly lacking behind others.
+
+Following code prepares summary statistics from ```Multi-Class summary``` from ```Caret``` package, including metrics like Accuracy, AUC, Precision, Recall, F1-score and others.
+
+```{r summr_func, echo=TRUE}
+# Preparing tables for summary function (selecting observations, predictions and probabilities)
+# Creating Multi-Class summary stats from caret package
+summary_tabl <- list()
+summary_stats <- list()
+
+for (i in c(1:length(models))) {
+  summary_tabl[[i]] <- test.model[[i]][, 4:8]
+  colnames(summary_tabl[[i]]) <- c("obs", "pred", "Def", "Mid", "Att")
+  
+  summary_stats[[i]] <- multiClassSummary(data = summary_tabl[[i]],
+                                          lev = levels(test$Position),
+                                          model = fit[[i]])
+}
+
+# Adding model names
+names(summary_tabl) <- models
+names(summary_stats) <- models
+```
+
+All these metrics were ranked for each algorithm. Algorithm that has scored the best metric (e.g. the highest Accuracy) received 10 pts (inverted rank) for that, second - 9 pts, and up to last - 1 pts. The average of points was calculated and models were sorted in the descending order (the most "accurate" model by most metrics first)
+
+```{r ranks}
+# Creating data frame with stats for models
+stats <-
+  data.frame(model = models, round(t(data.frame(summary_stats[1:10])),4))
+
+# Creating table with ranks for each statistic
+r <- data.frame(stats)
+r[, 2] <- rank(-stats[, 2])
+for (i in c(3:length(stats))) {
+  r[, i] <- rank(stats[, i])
+}
+
+# Showing top algorithms sorted by mean of their rank
+left_join(data.frame(model = models, score = round(rowMeans(subset(r, select = -1)),2)), 
+          stats, by = "model") %>% 
+  arrange(desc(score)) %>% t() %>%
+  kable(caption = "Algorithms and their metircs", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = F,
+    position = "center",
+    font_size = 9
+  )
+```
+
+As previously, by comparing all the metrics, GLMNET is above all other algorothms for this task. The only metric where it was not on top is ```prAUC```. XGBoost which may be awarded the second place is lacking behind in also ```prAUC``` and also in ```logLoss``` metric, which is much higher than for other top algorithms. However, Random Forest algorithm is consistently good algorithm across all metrics. 
+
+Confusion matrices for the best GLMNET algorithm can be seen below.
+
+**Confusion Matrix**
+
+```{r conf1}
+# Confusion Matrix for top algorithm
+confusionMatrix(data = pred[["glmnet"]], reference = test$Position)
+```
+
+**Confusion Matrix Precision-Recall**
+
+```{r conf2}
+confusionMatrix(data = pred[["glmnet"]],
+                reference = test$Position,
+                mode = "prec_recall")
+```
+
+As can be seen form matrices, only two players that are Attackers were classified as Defenders. All other incorrect guesses were for neighbouring positions Def/Mid or Mid/Att. 
+
+```{r glmnet}
+testing_results[method == "glmnet" & Position_gr == "Att" & pred == "Def",] %>%
+    kable(caption = "Attackers classified as Defenders for GLMNET", longtable = TRUE) %>%
+  kable_styling(
+    latex_options = c("striped", "bordered", "hover", "responsive", "HOLD_position", "repeat_header"),
+    full_width = F,
+    position = "center",
+    font_size = 9
+  )
+```
+
+# Conclusions
+
+For this task, GLMNET model was able to get ahead of other algorithms scoring Accuracy of **0.8952**, Mean Balanced Accuracy of **0.9132** and Mean F1 score of **0.8885**. The best model parameters were:
+
+```{r best_model1}
+# Best model parameters
+fit[["glmnet"]]$bestTune
+```
+
+Other good-scoring models were XGBoost with parameters:
+
+```{r best_model2}
+# Best model parameters
+fit[["xgbLinear"]]$bestTune
+```
+
+And Random Forests with parameters:
+
+```{r best_model3}
+# Best model parameters
+fit[["rf"]]$bestTune
+```
+
+The results were satisfying. However the work for sure can improved by diving deeper in few models like GLMNET or XGBoost and fine-tuning them to achieve more accurate results. For example to at least eliminate two Attacking players that were classified as Defenders. Also, the best models were the most time-consuming and required lots of computing resources. Althrough they were more accurate than Lindear Discriminant Analysis (LDA) model, it was much faster to compute LDA model and the results are not dramatically worse for that. Therefore, it is possible to conclude that it is possible to ahieve good results fast using simple models, but in order to bring it to perfection - one need to have a lot of resources and time to improve prediction bit by bit.
+
+\newpage
+
+# Appendix
+
+## 1.1 - Used enviroment/session
+
+```{r environment}
+print("Environment:")
+version
+```
+
+```{r session}
+print("Session Info:")
+sessionInfo()
+```
+
+## 1.2 - Source Code
+
+```
+# Author: Artjoms Formulevics
+# Capstone: Your Own Project
+
+#-----Data loading/initializing-----
+
+# Installing libraries, if not already present
+
+if (!require(caret))
+  install.packages("caret")
+if (!require(data.table))
+  install.packages("data.table")
+if (!require(dplyr))
+  install.packages("dplyr")
+if (!require(forcats))
+  install.packages("forcats")
+if (!require(ggplot2))
+  install.packages("ggplot2")
+if (!require(reshape2))
+  install.packages("reshape2")
+if (!require(kableExtra))
+  install.packages("kableExtra")
+if (!require(knitr))
+  install.packages("knitr")
+if (!require(stringr))
+  install.packages("stringr")
+if (!require(tidyr))
+  install.packages("tidyr")
+if (!require(tidyverse))
+  install.packages("tidyverse")
+if (!require(magrittr))
+  install.packages("magrittr")
+if (!require(ggrepel))
+  install.packages("ggrepel")
+if (!require(caTools))
+  install.packages("caTools")
+if (!require(MLmetrics))
+  install.packages("MLmetrics")
+
+# Loading libraries
+
+library(caret)
+library(data.table)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(reshape2)
+library(kableExtra)
+library(knitr)
+library(stringr)
+library(tidyr)
+library(tidyverse)
+library(magrittr)
+library(ggrepel)
+library(caTools)
+library(MLmetrics)
+
+# Setting Knitr format
+
+options(knitr.table.format = "html")
+
+# Loading Data
+
+fifa <-
+  read.csv(
+    "https://raw.githubusercontent.com/artjoms-formulevics/HarvardX/master/data.csv",
+    header = T,
+    stringsAsFactors = F
+  )
+
+# Saving original dataset
+
+fifa_original <- fifa
+
+#-----Tidying Data----
+
+## Taking a look at the dataset structure
+# Getting dimensions (size) of the dataset
+
+data.frame("Rows" = nrow(fifa), "Columns" = ncol(fifa)) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Getting information about variables classes and values
+
+data.frame(
+  variable_name = names(fifa),
+  class = sapply(fifa, typeof),
+  first_values = sapply(fifa, function(x)
+    paste0(head(x, n = 3),  collapse = ", ")),
+  row.names = NULL
+) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Converting player Value, Wage and Release Clause to numeric
+
+fifa$ValueLast <-
+  sapply(strsplit(as.character(fifa$Value), ""), tail, 1)
+fifa$WageLast <-
+  sapply(strsplit(as.character(fifa$Wage), ""), tail, 1)
+fifa$Release.Clause.Last <-
+  sapply(strsplit(as.character(fifa$Release.Clause), ""), tail, 1)
+
+extract <- function(x) {
+  regexp <- "[[:digit:]]+"
+  str_extract(x, regexp)
+}
+
+temp <- sapply(fifa$Value, extract)
+fifa$Value <- as.numeric(temp)
+fifa$Value <-
+  ifelse(fifa$ValueLast == "M", fifa$Value * 1000000, fifa$Value * 1000)
+
+temp <- sapply(fifa$Wage, extract)
+fifa$Wage <- as.numeric(temp)
+fifa$Wage <-
+  ifelse(fifa$WageLast == "M", fifa$Wage * 1000000, fifa$Wage * 1000)
+
+temp <- sapply(fifa$Release.Clause, extract)
+fifa$Release.Clause <- as.numeric(temp)
+fifa$Release.Clause <- ifelse(
+  fifa$Release.Clause.Last == "M",
+  fifa$Release.Clause * 1000000,
+  fifa$Release.Clause * 1000
+)
+
+# Converting Height to numeric & metric system
+
+temp <- str_split(fifa$Height, "'")
+for (i in 1:length(temp)) {
+  temp[[i]] <- as.numeric(temp[[i]])
+  temp[[i]] <- (temp[[i]][1] * 12) + temp[[i]][2]
+}
+temp <- as.numeric(unlist(temp)) * 2.54
+fifa$Height <- temp
+
+# Converting Weight to numeric & metric system
+
+temp <- sapply(fifa$Weight, extract)
+temp <- as.numeric(temp) * 0.453592
+fifa$Weight <- temp
+
+# Filtering out Goalkeepers
+
+fifa <- filter(fifa, fifa$Position != "GK")
+fifa <- filter(fifa, fifa$Position != "")
+
+# Removing Poistion scores that won't be used
+
+fifa[, 29:54] <- NULL
+
+# Removing not meaningful variables
+
+fifa <-
+  subset(
+    fifa,
+    select = -c(
+      ID,
+      X,
+      Photo,
+      Flag,
+      Club.Logo,
+      Real.Face,
+      Joined,
+      Loaned.From,
+      Contract.Valid.Until,
+      GKDiving,
+      GKHandling,
+      GKKicking,
+      GKPositioning,
+      GKReflexes,
+      ValueLast,
+      WageLast,
+      Release.Clause.Last,
+      Special
+    )
+  )
+
+# Show Position groups
+
+temp <- data.frame(Original = unique(fifa$Position))
+temp$New <- fct_collapse(
+  temp$Original,
+  Def = c("RCB", "CB", "LCB", "LB", "RB", "RWB", "LWB"),
+  Mid = c(
+    "RCM",
+    "LCM",
+    "LDM",
+    "CAM",
+    "CDM",
+    "RM",
+    "LAM",
+    "LM",
+    "RDM",
+    "CM",
+    "RAM"
+  ),
+  Att = c("RF", "ST", "LF", "RS", "LS", "RW", "CF", "LW")
+)
+temp %>%
+  arrange(New, Original) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Group all positions into three categories
+
+fifa$Position_gr <- fct_collapse(
+  fifa$Position,
+  Def = c("RCB", "CB", "LCB", "LB", "RB", "RWB", "LWB"),
+  Mid = c(
+    "RCM",
+    "LCM",
+    "LDM",
+    "CAM",
+    "CDM",
+    "RM",
+    "LAM",
+    "LM",
+    "RDM",
+    "CM",
+    "RAM"
+  ),
+  Att = c("RF", "ST", "LF", "RS", "LS", "RW", "CF", "LW")
+)
+
+fifa$Position_gr <-
+  factor(fifa$Position_gr, levels = c("Def", "Mid", "Att"))
+
+# Remove unwanted variables and temporarty variables
+
+rm(temp, i, extract)
+
+#-----Manipulations/Visualizations-----
+
+# Getting dimensions (size) of the dataset
+
+data.frame("Rows" = nrow(fifa), "Columns" = ncol(fifa)) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Getting information about variables classes and values
+
+data.frame(
+  variable_name = names(fifa),
+  class = sapply(fifa, typeof),
+  first_values = sapply(fifa, function(x)
+    paste0(head(x, n = 3),  collapse = ", ")),
+  row.names = NULL
+) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Showing missing values
+
+sapply(fifa, function(x)
+  sum(is.na(x))) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Removing Release Clause from analysis
+
+fifa$Release.Clause <- NULL
+
+# Number of players by position in the dataset
+
+fifa %>% group_by(Position) %>% summarise(count = n()) %>%
+  ggplot(aes(reorder(Position, -count), count)) +
+  theme_light()  +
+  geom_col() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Number of Players by Position",
+       x = "Position",
+       y = "Players")
+
+# Number of players by position after grouping in the dataset
+
+fifa %>% group_by(Position = Position_gr) %>% summarise(count = n()) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Distribution of Overall Rating by Position
+
+fifa %>%
+  ggplot(aes(Overall)) +
+  theme_light()  +
+  geom_histogram(bins =  14) +
+  labs(title = "Overall Rating Distribution by Position",
+       x = "Overall Rating",
+       y = "Frequency") +
+  facet_grid(Position_gr ~ .)
+
+# Top 15 players by overall rating
+
+fifa %>%
+  group_by(Position_gr, Name, Overall, Potential) %>%
+  summarise() %>%
+  arrange(desc(Overall)) %>%
+  head(n = 15) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Top 15 players by Value
+
+fifa %>%
+  group_by(Position_gr, Name, Value, Wage) %>%
+  summarise() %>%
+  arrange(desc(Value)) %>%
+  head(n = 15) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Finding the most valuable teams
+
+fifa %>%
+  group_by(Club) %>%
+  summarise(Club.Squad.Value = round(sum(Value) / 1000000)) %>%
+  arrange(-Club.Squad.Value) %>%
+  head(10) %>%
+  ggplot(aes(
+    x = as.factor(Club) %>%
+      fct_reorder(Club.Squad.Value),
+    y = Club.Squad.Value,
+    label = Club.Squad.Value
+  )) +
+  geom_text(hjust = 0.01,
+            inherit.aes = T,
+            position = "identity") +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Club") +
+  ylab("Squad Value in Million") +
+  ggtitle("Most valuable teams")
+
+# Correlation between player rating and jersey number
+
+fifa %>%
+  group_by(Jersey.Number) %>%
+  summarise(
+    Avg.Overall = sum(Overall) / length(Jersey.Number),
+    Player.Count = sum(Jersey.Number)
+  ) %>%
+  arrange(-Avg.Overall) %>%
+  ggplot(aes(
+    x = Jersey.Number,
+    y = Avg.Overall,
+    col = ifelse(Avg.Overall < 70, "darkgrey", "Red")
+  )) +
+  geom_point(position = "jitter") +
+  theme(legend.position = "none") +
+  geom_text_repel(aes(label = ifelse(Avg.Overall >= 70, Jersey.Number, ""))) +
+  ggtitle("Correlation between player rating and jersey number")
+
+# Most popular Player Jersey by Position Group
+
+bind_rows(
+  fifa[fifa$Position_gr == "Def",] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5),
+  fifa[fifa$Position_gr == "Mid",] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5),
+  fifa[fifa$Position_gr == "Att",] %>%
+    group_by(Position_gr, Jersey.Number) %>%
+    summarise(count = n()) %>%
+    arrange(-count) %>%
+    head(5)
+) %>%
+  kable() %>% collapse_rows(columns = 1) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+#----Preparing for Modelling-----
+
+# Creating dataset with names for testing
+
+fifa_names <-
+  subset(fifa, select = c(Name, Overall, Position, Position_gr))
+
+# Removing Names and ungroped positions and unwanted variables
+
+fifa$Position <- fifa$Position_gr
+fifa <-
+  subset(fifa, select = -c(Name, Position_gr, Club, Nationality))
+
+# Leaving position pout of preprocessing
+
+fifa_pos <- fifa$Position
+fifa$Position <- NULL
+
+# Converting characters to factors
+
+fifa[sapply(fifa, is.character)] <-
+  lapply(fifa[sapply(fifa, is.character)],
+         as.factor)
+
+# Centering and scaling
+
+preProc <- preProcess(fifa, method = c("center", "scale"))
+fifa <- predict(preProc, fifa)
+
+# Convering factors to numbers (dummy variables)
+
+dmy <- dummyVars("~ .", data = fifa, fullRank = F)
+fifa <- data.frame(predict(dmy, newdata = fifa))
+
+# Putting Position back as the first variable
+
+fifa$Position <- fifa_pos
+fifa <- fifa[, c(61, 1:60)]
+
+# Setting seed for reproducability
+
+seed = 1
+set.seed(seed)
+
+# Train Control function for repeated cross-validation
+
+train.control <-
+  trainControl(method = "repeatedcv",
+               number = 10,
+               repeats = 3)
+
+# Splitting into train and test sets 0.9 vs 0.1 (also for names)
+
+sample <- sample.split(fifa, SplitRatio = 0.9)
+train <- subset(fifa, sample == TRUE)
+test <- subset(fifa, sample == FALSE)
+
+train_names <- subset(fifa_names, sample == TRUE)
+test_names <- subset(fifa_names, sample == FALSE)
+
+#----Modelling-----
+
+# Setting list and names
+
+fit <- list()
+pred <- list()
+pred.prob <- list()
+
+models <-
+  c("lda",
+    "rda",
+    "nb",
+    "knn",
+    "rpart",
+    "C5.0",
+    "rf",
+    "glmnet",
+    "gbm",
+    "xgbLinear")
+
+# Creating each model and predictions & probabilities for each class
+
+for (i in c(1:length(models))) {
+  set.seed(seed)
+  fit[[i]] <-
+    train(Position ~ .,
+          data = train,
+          method = models[i],0
+names(fit) <- models
+names(pred) <- models
+names(pred.prob) <- models
+
+#------Testing Results-----
+
+# Testing what players were guessed incorrectly
+# Setting lists
+
+test.model <- list()
+n_miss <- list()
+
+# For each model creating a table with actual vs predicted outcome & probabilities of classes
+# Also creating a table with overall number of incorrect predictions
+# For each algorithm showing 10 top players (by rating) which were incorrectly classified
+
+for (i in c(1:length(models))) {
+  test.model[[i]] <-
+    cbind(test_names, pred = pred[[i]], round(pred.prob[[i]], 2))
+  test.model[[i]]$correct <-
+    ifelse(test.model[[i]]$Position_gr == test.model[[i]]$pred, 1, 0)
+  test.model[[i]]$method <- models[i]
+  
+  n_miss[[i]] <-
+    test.model[[i]] %>% filter(test.model[[i]]$correct == 0) %>% summarise(n())
+  
+  head(test.model[[i]][test.model[[i]]$correct == 0,], 10) %>%
+    kable() %>%
+    kable_styling(
+      bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+      full_width = FALSE,
+      position = "center",
+      font_size = 11
+    ) %>% print()
+}
+
+# Adding model names
+
+names(test.model) <- models
+names(n_miss) <- models
+
+# Binding all results together
+
+testing_results <- rbindlist(test.model)
+n_missed <- rbindlist(n_miss, idcol = models)
+colnames(n_missed) <- c("Model", "Missed")
+
+# Showing how top players were incorrectly classified
+
+testing_results %>% filter(correct == "0") %>% group_by(Name, Overall, Position, Position_gr, pred) %>%
+  summarise(count = n()) %>%
+  arrange(desc(Overall)) %>% head(20) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Showing some examples
+
+testing_results[Name == "L. Modrić" & correct == 0, ] %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+testing_results[Name == "L. Bonucci" & correct == 0, ] %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Showing which players been wrongly classified by most algorithms
+
+testing_results %>% filter(correct == "0") %>% group_by(Name, Overall, Position, Position_gr) %>%
+  summarise(count = n()) %>%
+  arrange(desc(Overall)) %>% arrange(desc(count)) %>% head(20) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Showing some examples
+
+testing_results[Name == "Iniesta" & correct == 0, ] %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+temp <- data.frame(fifa_original[fifa_original$Name == "Iniesta", 29:54])  %>% t() %>% data.frame()
+sort(temp[,1], decreasing = T) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+rm(temp)
+
+# Showing total number of missed predictions for each model in descending order
+
+n_missed %>% arrange(desc(Missed)) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Creating summary for all resamples for all models with Accuracy and Kappa metrics
+
+results_resamples <- resamples(fit)
+summary(results_resamples, metric = c("Accuracy", "Kappa"))
+
+# Selecting Accuracy metric to plot with Box-Plot chart
+
+results_acc <-
+  results_resamples$values[, c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)]
+colnames(results_acc) <-
+  gsub("~Accuracy", "", colnames(results_acc))
+
+ggplot(data = melt(results_acc),
+       aes(x = variable, y = value)) + geom_boxplot() + theme_light()  +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Comparison of Accuracy of Models",
+       x = "Model",
+       y = "Accuracy")
+
+# Preparing tables for summary function (selecting observations, predictions and probabilities)
+# Creating Multi-Class summary stats from caret package
+
+summary_tabl <- list()
+summary_stats <- list()
+
+for (i in c(1:length(models))) {
+  summary_tabl[[i]] <- test.model[[i]][, 4:8]
+  colnames(summary_tabl[[i]]) <-
+    c("obs", "pred", "Def", "Mid", "Att")
+  
+  summary_stats[[i]] <- multiClassSummary(data = summary_tabl[[i]],
+                                          lev = levels(test$Position),
+                                          model = fit[[i]])
+  
+}
+
+# Adding model names
+
+names(summary_tabl) <- models
+names(summary_stats) <- models
+
+# Creating data frame with stats for models
+
+stats <-
+  data.frame(model = models, round(t(data.frame(summary_stats[1:10])), 4))
+
+# Creating table with ranks for each statistic
+
+r <- data.frame(stats)
+r[, 2] <- rank(-stats[, 2])
+for (i in c(3:length(stats))) {
+  r[, i] <- rank(stats[, i])
+}
+
+# Showing top algorithms sorted by mean of their rank
+
+left_join(data.frame(model = models, score = round(rowMeans(
+  subset(r, select = -1)
+), 2)),
+stats, by = "model") %>%
+  arrange(desc(score)) %>% t() %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  )
+
+# Confusion Matrices for top algorithm
+confusionMatrix(data = pred[["glmnet"]], reference = test$Position)
+confusionMatrix(data = pred[["glmnet"]],
+                reference = test$Position,
+                mode = "prec_recall")
+
+# Examples for GLMNET
+testing_results[method == "glmnet" & Position_gr == "Att" & pred == "Def",] %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover", "responsive"),
+    full_width = FALSE,
+    position = "center",
+    font_size = 11
+  ) 
+
+# Best model parameters
+
+fit[["glmnet"]]$bestTune
+fit[["xgbLinear"]]$bestTune
+fit[["rf"]]$bestTune
+
+```
+
