@@ -1,6 +1,8 @@
 # Predicting FIFA Player Position with R & Caret
-Repo for a project of Predicting FIFA player position, a Capstone Project from HarvardX Course on Data Science.
+Repo for a project of Predicting FIFA player position, a Capstone Project from HarvardX Course on Data Science and my first ever data analysis project.
 
 # License
 
 MIT
+
+Copyright:L Artjoms Formulevics, 2021
