@@ -3,6 +3,4 @@ Repo for a project of Predicting FIFA player position, a Capstone Project from H
 
 # License
 
-MIT
-
-Copyright:L Artjoms Formulevics, 2021
+MIT License Copyright (c) 2021, Artjoms Formulevics
