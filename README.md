@@ -11,4 +11,4 @@ Please refer to the uploaded `pdf` file or `rmd` file for step-by-step detailed 
 
 ## License
 
-MIT License Copyright (c) 2021, Artjoms Formulevics
+MIT License Copyright (c) 2020, Artjoms Formulevics
